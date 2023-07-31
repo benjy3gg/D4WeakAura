@@ -1,4 +1,6 @@
 # D4 "WeakAura"
+let's you create custom overlays by capturing specific regions on your screen.
+doesn't access/alter game memory in any way!
 
 ## Prerequisited
 - Get Autohotkey V1 -> https://www.autohotkey.com/ -> Download v1.1
