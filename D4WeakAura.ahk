@@ -15,6 +15,8 @@ SetControlDelay, -1
 SendMode Input
 #Include Gdip_All.ahk
 
+;SetTimer, Rumble, 1000
+
 ; Start GDI+
 If !pToken := Gdip_Startup()
 {
@@ -46,10 +48,22 @@ global drawDebug := False
 
 global f1Pressed := -1
 global f3Pressed := -1
+global clonex := -1
+global cloney := -1
+global clonew := -1
+global cloneh := -1
+global clonedx := -1
+global clonedy := -1
 global tempX := -1
 global tempY := -1
 global tempW := -1
 global tempH := -1
+global rumbleStrength := 100
+global rumbleLength := 50
+global rumbleRepeats := 1
+global vibrationEnabled := True
+global TargetScriptTitle := "Rumbler.ahk ahk_class AutoHotkey"
+global LastRumbleSend := -1
 
 ; Create a layered window (+E0x80000 : must be used for UpdateLayeredWindow to work!) that is always on top (+AlwaysOnTop), has no taskbar entry or caption
 Gui, Overlay: -Caption +E0x80000 +E0x20 +LastFound +AlwaysOnTop +ToolWindow +OwnDialogs
@@ -185,6 +199,33 @@ render_section(section, G, pScreenshot)
             Gdip_DeletePen(debugPen)
         }
     }
+    Else if section.cloneOutputType == "Vibrate"
+    {
+        ARGB := Gdip_GetPixelColor(pScreenshot, 0, 0, 1)
+        if(section.cloneColor == ARGB)
+        {
+            rumbleIntensity := section.vibrationIntensity * 255
+            rumbleLength := section.vibrationLength
+            rumbleRepeats := section.vibrationRepeats
+            data = %rumbleIntensity%|%rumbleLength%|%rumbleRepeats%
+
+            if(A_TickCount >= LastRumbleSend + (rumbleLength * rumbleRepeats) + 300)
+            {
+                LastRumbleSend := A_TickCount
+                send_rumble(data,TargetScriptTitle)
+            }
+
+            ;Rumbler(section.cloneTransparency * 255, 100, 2)
+            ;SetTimer, Rumble, 30
+        }
+
+        if drawDebug {
+            debugPen := Gdip_CreatePen(section.cloneColor, 2)
+            Gdip_DrawRectangle(G, debugPen, section.x, section.y, section.w, section.h)
+            Gdip_DrawLine(G, debugPen, section.x, section.y, A_ScreenWidth/2, 10)
+            Gdip_DeletePen(debugPen)
+        }
+    }
     Else{
         if section.cloneRotation
         {
@@ -258,46 +299,28 @@ should_render(ini, G)
     return ARGB == general.enableColor
 }
 
+send_rumble(ByRef StringToSend, ByRef TargetScriptTitle)
+{
+    VarSetCapacity(CopyDataStruct, 3*A_PtrSize, 0)  ; Set up the structure's memory area.
+    ; First set the structure's cbData member to the size of the string, including its zero terminator:
+    SizeInBytes := (StrLen(StringToSend) + 1) * (A_IsUnicode ? 2 : 1)
+    NumPut(SizeInBytes, CopyDataStruct, A_PtrSize)  ; OS requires that this be done.
+    NumPut(&StringToSend, CopyDataStruct, 2*A_PtrSize)  ; Set lpData to point to the string itself.
+    Prev_DetectHiddenWindows := A_DetectHiddenWindows
+    Prev_TitleMatchMode := A_TitleMatchMode
+    DetectHiddenWindows On
+    SetTitleMatchMode 2
+    TimeOutTime := 10  ; Optional. Milliseconds to wait for response from receiver.ahk. Default is 5000
+    ; Must use SendMessage not PostMessage.
+    SendMessage, 0x004A, 0, &CopyDataStruct,, %TargetScriptTitle%,,,, %TimeOutTime% ; 0x004A is WM_COPYDATA.
+    DetectHiddenWindows %Prev_DetectHiddenWindows%  ; Restore original setting for the caller.
+    SetTitleMatchMode %Prev_TitleMatchMode%         ; Same.
+    return ErrorLevel  ; Return SendMessage's reply back to our caller.
+}
 
-;SetTimer, RenderLoop, -1
+SetTimer Looper, 16
 
-;~ RenderLoop:
-    ;~ active := GetRunningWindowText("Diablo IV")
-    ;~ Gdip_GraphicsClear(G)
-    ;~ if (showUI and active)
-    ;~ {
-        ;~ ini := iniObj(iniFilename)
-
-        ;~ render := should_render(ini, G)
-
-        ;~ if(render)
-        ;~ {
-            ;~ for section_name, section_data in ini {
-                ;~ if(section_name != "General")
-                ;~ {
-                    ;~ pScreenshot := Screenshot(section_data.x,section_data.y,section_data.w,section_data.h)
-                    ;~ render_section(section_data, G, pScreenshot)
-                ;~ }
-                ;~ else
-                ;~ {
-                    ;~ if(drawDebug) {
-                        ;~ debugPen := Gdip_CreatePen(0xffff0000, 1)
-                        ;~ Gdip_DrawRectangle(G, debugPen, section_data.enableX-1, section_data.enableY-1, 2, 2)
-                        ;~ debugPen := Gdip_CreatePen(0xbbff0000, 1)
-                        ;~ Gdip_DrawLine(G, debugPen, Width/2, 0, Width/2, Height)
-                        ;~ Gdip_DrawLine(G, debugPen, 0, Height/2, Width, Height/2)
-                    ;~ }
-                ;~ }
-            ;~ }
-        ;~ }
-
-
-    ;~ }
-    ;~ UpdateLayeredWindow(hwnd1, hdc, 0, 0, Width, Height)
-    ;~ Gdip_DisposeBitmap(pScreenshot)
-    ;~ Return
-
-Loop
+Looper:
 {
     sT:=A_TickCount
     active := GetRunningWindowText("Diablo IV")
@@ -320,12 +343,15 @@ Loop
                     }
                     else
                     {
+                        ; Edit mode
                         MouseGetPos , xxxx, yyyy
                         section_data.dx := xxxx - section_data.w
                         section_data.dy := yyyy - section_data.h
                         section_data.cloneTransparency := cloneToMoveTransparency
                         section_data.cloneScale := cloneToMoveScale
                         render_section(section_data, G, pScreenshot)
+                        Options = x%0% y1p Left cbbffffff r4 s30
+                        Gdip_TextToGraphics(G, "Edit Mode: Scrollwheel up/down for transparency, Ctrl+Scrollwheel for size. Press F3 again to save!", Options, Font, Width, Height)
                     }
                 }
                 else
@@ -342,6 +368,18 @@ Loop
             }
         }
 
+        if(drawDebug)
+        {
+            Options = x%0% y1p Left cbbffffff r4 s30
+            Gdip_TextToGraphics(G, "F1: New Overlay Rectangle Selection", Options, Font, Width, Height)
+            Options = x%0% y3p Left cbbffffff r4 s30
+            Gdip_TextToGraphics(G, "F2: New Pixel Selection (check Readme for details)", Options, Font, Width, Height)
+            Options = x%0% y5p Left cbbffffff r4 s30
+            Gdip_TextToGraphics(G, "F3: Edit Mode, Ctrl+F3: Delete Overlay under cursor", Options, Font, Width, Height)
+            Options = x%0% y7p Left cbbffffff r4 s30
+            Gdip_TextToGraphics(G, "F4: Toggle Overlay, F5: Show Help / Debug View", Options, Font, Width, Height)
+        }
+
         if(f1Pressed == 0)
         {
             MouseGetPos , tempX, tempY
@@ -350,6 +388,8 @@ Loop
             debugPen := Gdip_CreatePen(0xffff0000, 1)
             Gdip_DrawRectangle(G, debugPen, clonex, cloney, tempW, tempH)
             Gdip_DeletePen(debugPen)
+            Options = x%10% y%0% Left cbbffffff r4 s30
+            Gdip_TextToGraphics(G, "Use the mouse to draw a rectangle, press F1 again to submit.", Options, Font, Width, Height)
         }
 
         if(f1Pressed == 1)
@@ -358,9 +398,9 @@ Loop
             pScreenshot := Screenshot(clonex,cloney,clonew,cloneh)
             Gdip_DrawImage(G, pScreenshot, tempX2, tempY2, clonew, cloneh)
             Gdip_DisposeBitmap(pScreenshot)
+            Options = x%10% y%0% Left cbbffffff r4 s30
+            Gdip_TextToGraphics(G, "Move the mouse to where you want to position the overlay and press F1 again to submit.", Options, Font, Width, Height)
         }
-
-
     }
     UpdateLayeredWindow(hwnd1, hdc, 0, 0, Width, Height)
     Gdip_DisposeBitmap(pScreenshot)
@@ -371,6 +411,7 @@ Loop
         sleepfor := 16-ticks
         DllCall("Sleep","UInt", sleepfor)
     }
+    return
 }
 
 
@@ -401,9 +442,7 @@ iniObj(iniFilename) {
     Return ini
 }
 
-
-#IfWinActive Diablo IV
-F1::
+f1Function()
 {
     if(f1Pressed < 0)
     {
@@ -423,7 +462,8 @@ F1::
     {
         MouseGetPos , clonedx, clonedy
         Gui, 2:Destroy
-        Gui, 2:Add, Text,, Enter the name:
+        Gui, 2:Add, Text,, Configure the Overlay
+        Gui, 2:Add, Text,, Enter an identifier:
         Gui, 2:Add, Edit, vMyInput,
         Gui, 2:Add, Text,, Transparency:
         Gui, 2:Add, Edit, vMyTransparency,
@@ -436,40 +476,6 @@ F1::
     return
 }
 
-^F1::
-{
-    MouseGetPos , enableX, enableY
-    pScreenshot := Screenshot(enableX, enableY, 1, 1)
-    ARGB := Gdip_GetPixelColor(pScreenshot, 0, 0, 1)
-    IniWrite, %ARGB%, %iniFilename%, General, enableColor
-    IniWrite, %enableX%, %iniFilename%, General, enableX
-    IniWrite, %enableY%, %iniFilename%, General, enableY
-    return
-}
-
-F2::
-{
-    MouseGetPos , clonedx, clonedy
-    cloneOutputType := "border"
-
-    clonex := clonedx
-    cloney := clonedy
-    clonew := 8
-    cloneh := 8
-    clonedx := clonedx
-    clonedy := clonedy
-
-    Gui, 2:Destroy
-    Gui, 2:Add, Text,, Enter a name:
-    Gui, 2:Add, Edit, vMyInput,
-    Gui, 2:Add, Text,, Where to put?
-    Gui, 2:Add, DropdownList,vMyDropdown,Left|Right|Top|Bottom|Full
-    Gui, 2:Add, Text,, Transparency
-    Gui, 2:Add, Edit, vMyTransparency,
-    Gui, 2:Add,Button,gOkBorder wp,Ok
-    Gui, 2:Show,,This is the title
-    return
-}
 
 SaveClone:
 {
@@ -532,6 +538,133 @@ did_we_click_on_clone(x,y,w,h, xxx, yyy, s, r)
             && yyy >= top && yyy <= bottom
 
     return inside
+}
+
+
+OkClone:
+    Gui, 2:Hide
+    GuiControlGet, MyDropdown,, MyDropdown
+    GuiControlGet, MyInput,, MyInput
+    GuiControlGet, MyTransparency,, MyTransparency
+    MsgBox, You selected %MyDropdown% and entered %MyInput% with transparency %MyTransparency%.
+    vclonename := MyInput
+    vwhere := MyDropdown
+    vtransparency := MyTransparency
+
+    IniWrite, %clonex%, %iniFilename%, clone_%vclonename%, x
+    IniWrite, %cloney%, %iniFilename%, clone_%vclonename%, y
+
+    IniWrite, %clonew%, %iniFilename%, clone_%vclonename%, w
+    IniWrite, %cloneh%, %iniFilename%, clone_%vclonename%, h
+
+    IniWrite, %clonedx%, %iniFilename%, clone_%vclonename%, dx
+    IniWrite, %clonedy%, %iniFilename%, clone_%vclonename%, dy
+
+    IniWrite, %A_ScreenHeight%, %iniFilename%, clone_%vclonename%, height
+    IniWrite, %A_ScreenWidth%, %iniFilename%, clone_%vclonename%, width
+
+    IniWrite, %vclonename%, %iniFilename%, clone_%vclonename%, clonename
+    IniWrite, 1.0, %iniFilename%, clone_%vclonename%, cloneTransparency
+    IniWrite, %vwhere%, %iniFilename%, clone_%vclonename%, cloneOutputType
+
+    random_color := generate_random_argb()
+    IniWrite, %random_color%, %iniFilename%, clone_%vclonename%, cloneColor
+
+    clonex := -1
+    cloney := -1
+    clonew := -1
+    cloneh := -1
+    clonedx := -1
+    clonedy := -1
+    IniRead, sections, Filename
+    ini := iniObj(iniFilename)
+
+    return
+
+OkBorder:
+    Gui, 2:Hide
+    GuiControlGet, MyDropdown,, MyDropdown
+    GuiControlGet, MyInput,, MyInput
+    GuiControlGet, MyTransparency,, MyTransparency
+    MsgBox, You selected %MyDropdown% and entered %MyInput% with transparency %MyTransparency%.
+    vclonename := MyInput
+    vwhere := MyDropdown
+    vtransparency := MyTransparency
+
+    pScreenshot := Screenshot(clonex,cloney,1,1)
+    ARGB := Gdip_GetPixelColor(pScreenshot, 0, 0, 1)
+
+    IniWrite, %clonex%, %iniFilename%, clone_%vclonename%, x
+    IniWrite, %cloney%, %iniFilename%, clone_%vclonename%, y
+
+    IniWrite, %clonew%, %iniFilename%, clone_%vclonename%, w
+    IniWrite, %cloneh%, %iniFilename%, clone_%vclonename%, h
+
+    IniWrite, %clonedx%, %iniFilename%, clone_%vclonename%, dx
+    IniWrite, %clonedy%, %iniFilename%, clone_%vclonename%, dy
+
+    IniWrite, %A_ScreenHeight%, %iniFilename%, clone_%vclonename%, height
+    IniWrite, %A_ScreenWidth%, %iniFilename%, clone_%vclonename%, width
+
+    IniWrite, %vclonename%, %iniFilename%, clone_%vclonename%, clonename
+    IniWrite, 1.0, %iniFilename%, clone_%vclonename%, cloneTransparency
+    IniWrite, %vwhere%, %iniFilename%, clone_%vclonename%, cloneOutputType
+
+    random_color := generate_random_argb()
+    IniWrite, %ARGB%, %iniFilename%, clone_%vclonename%, cloneColor
+
+    clonex := -1
+    cloney := -1
+    clonew := -1
+    cloneh := -1
+    clonedx := -1
+    clonedy := -1
+    IniRead, sections, Filename
+    ini := iniObj(iniFilename)
+
+    return
+
+
+#IfWinActive Diablo IV
+F1::
+{
+    f1Function()
+    return
+}
+
+^F1::
+{
+    MouseGetPos , enableX, enableY
+    pScreenshot := Screenshot(enableX, enableY, 1, 1)
+    ARGB := Gdip_GetPixelColor(pScreenshot, 0, 0, 1)
+    IniWrite, %ARGB%, %iniFilename%, General, enableColor
+    IniWrite, %enableX%, %iniFilename%, General, enableX
+    IniWrite, %enableY%, %iniFilename%, General, enableY
+    return
+}
+
+F2::
+{
+    MouseGetPos , clonedx, clonedy
+    cloneOutputType := "border"
+
+    clonex := clonedx
+    cloney := clonedy
+    clonew := 8
+    cloneh := 8
+    clonedx := clonedx
+    clonedy := clonedy
+
+    Gui, 2:Destroy
+    Gui, 2:Add, Text,, Enter an identifier:
+    Gui, 2:Add, Edit, vMyInput,
+    Gui, 2:Add, Text,, Where to display
+    Gui, 2:Add, DropdownList,vMyDropdown,Left|Right|Top|Full|Vibrate
+    Gui, 2:Add, Text,, Modifier (Transparency/Vibrate)
+    Gui, 2:Add, Edit, vMyTransparency,
+    Gui, 2:Add,Button,gOkBorder wp,Ok
+    Gui, 2:Show,,This is the title
+    return
 }
 
 F3::
@@ -645,89 +778,7 @@ WheelDown::
     }
     return
 }
-
-
 #If
-
-OkClone:
-    Gui, 2:Hide
-    GuiControlGet, MyDropdown,, MyDropdown
-    GuiControlGet, MyInput,, MyInput
-    GuiControlGet, MyTransparency,, MyTransparency
-    MsgBox, You selected %MyDropdown% and entered %MyInput% with transparency %MyTransparency%.
-    vclonename := MyInput
-    vwhere := MyDropdown
-    vtransparency := MyTransparency
-
-    IniWrite, %clonex%, %iniFilename%, clone_%vclonename%, x
-    IniWrite, %cloney%, %iniFilename%, clone_%vclonename%, y
-
-    IniWrite, %clonew%, %iniFilename%, clone_%vclonename%, w
-    IniWrite, %cloneh%, %iniFilename%, clone_%vclonename%, h
-
-    IniWrite, %clonedx%, %iniFilename%, clone_%vclonename%, dx
-    IniWrite, %clonedy%, %iniFilename%, clone_%vclonename%, dy
-
-    IniWrite, %A_ScreenHeight%, %iniFilename%, clone_%vclonename%, height
-    IniWrite, %A_ScreenWidth%, %iniFilename%, clone_%vclonename%, width
-
-    IniWrite, %vclonename%, %iniFilename%, clone_%vclonename%, clonename
-    IniWrite, 1.0, %iniFilename%, clone_%vclonename%, cloneTransparency
-    IniWrite, %vwhere%, %iniFilename%, clone_%vclonename%, cloneOutputType
-
-    random_color := generate_random_argb()
-    IniWrite, %random_color%, %iniFilename%, clone_%vclonename%, cloneColor
-
-    clonex := -1
-    cloney := -1
-    clonew := -1
-    cloneh := -1
-    clonedx := -1
-    clonedy := -1
-    IniRead, sections, Filename
-    ini := iniObj(iniFilename)
-
-    return
-
-OkBorder:
-    Gui, 2:Hide
-    GuiControlGet, MyDropdown,, MyDropdown
-    GuiControlGet, MyInput,, MyInput
-    GuiControlGet, MyTransparency,, MyTransparency
-    MsgBox, You selected %MyDropdown% and entered %MyInput% with transparency %MyTransparency%.
-    vclonename := MyInput
-    vwhere := MyDropdown
-    vtransparency := MyTransparency
-
-    IniWrite, %clonex%, %iniFilename%, clone_%vclonename%, x
-    IniWrite, %cloney%, %iniFilename%, clone_%vclonename%, y
-
-    IniWrite, %clonew%, %iniFilename%, clone_%vclonename%, w
-    IniWrite, %cloneh%, %iniFilename%, clone_%vclonename%, h
-
-    IniWrite, %clonedx%, %iniFilename%, clone_%vclonename%, dx
-    IniWrite, %clonedy%, %iniFilename%, clone_%vclonename%, dy
-
-    IniWrite, %A_ScreenHeight%, %iniFilename%, clone_%vclonename%, height
-    IniWrite, %A_ScreenWidth%, %iniFilename%, clone_%vclonename%, width
-
-    IniWrite, %vclonename%, %iniFilename%, clone_%vclonename%, clonename
-    IniWrite, 1.0, %iniFilename%, clone_%vclonename%, cloneTransparency
-    IniWrite, %vwhere%, %iniFilename%, clone_%vclonename%, cloneOutputType
-
-    random_color := generate_random_argb()
-    IniWrite, %random_color%, %iniFilename%, clone_%vclonename%, cloneColor
-
-    clonex := -1
-    cloney := -1
-    clonew := -1
-    cloneh := -1
-    clonedx := -1
-    clonedy := -1
-    IniRead, sections, Filename
-    ini := iniObj(iniFilename)
-
-    return
 
 F4::
 {
